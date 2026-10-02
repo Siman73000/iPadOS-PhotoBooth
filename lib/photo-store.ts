@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { getRedis, getBinaryBase64, setBinary } from "./redis";
+import { getRedis, getBinary, setBinary } from "./redis";
 
 const CHUNK_SIZE = 2_000_000;
 
@@ -37,20 +37,30 @@ export async function savePhoto(bytes: Uint8Array, metadata: Omit<PhotoMetadata,
     chunks,
   };
 
-  const redis = getRedis();
-  if (ttl) await redis.set(`photo:${id}:meta`, record, { ex: ttl });
-  else await redis.set(`photo:${id}:meta`, record);
+  const redis = await getRedis();
+  const serialized = JSON.stringify(record);
+  if (ttl) await redis.set(`photo:${id}:meta`, serialized, { EX: ttl });
+  else await redis.set(`photo:${id}:meta`, serialized);
   return record;
 }
 
 export async function getPhoto(id: string) {
-  const redis = getRedis();
-  const meta = await redis.get<PhotoMetadata>(`photo:${id}:meta`);
-  if (!meta || !Number.isInteger(meta.chunks) || meta.chunks < 1) return null;
+  const redis = await getRedis();
+  const serialized = await redis.get(`photo:${id}:meta`);
+  if (!serialized) return null;
+
+  let meta: PhotoMetadata;
+  try {
+    meta = JSON.parse(serialized) as PhotoMetadata;
+  } catch {
+    return null;
+  }
+
+  if (!Number.isInteger(meta.chunks) || meta.chunks < 1) return null;
 
   const parts: Uint8Array[] = [];
   for (let i = 0; i < meta.chunks; i++) {
-    const part = await getBinaryBase64(`photo:${id}:chunk:${i}`);
+    const part = await getBinary(`photo:${id}:chunk:${i}`);
     if (!part) return null;
     parts.push(part);
   }

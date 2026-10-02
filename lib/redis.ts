@@ -1,59 +1,66 @@
-import { Redis } from "@upstash/redis";
+import { createClient, RESP_TYPES } from "redis";
 
-let redis: Redis | null = null;
+type RedisClient = ReturnType<typeof createClient>;
 
-export function getRedis() {
-  if (!process.env.UPSTASH_REDIS_REST_URL || !process.env.UPSTASH_REDIS_REST_TOKEN) {
-    throw new Error("Missing UPSTASH_REDIS_REST_URL or UPSTASH_REDIS_REST_TOKEN.");
+type GlobalRedisState = {
+  redisClient?: RedisClient;
+  connectPromise?: Promise<void>;
+};
+
+const globalForRedis = globalThis as unknown as GlobalRedisState;
+
+function getOrCreateRedisClient() {
+  if (globalForRedis.redisClient) return globalForRedis.redisClient;
+
+  const url = process.env.REDIS_URL;
+  if (!url) {
+    throw new Error("Missing REDIS_URL environment variable.");
   }
-  if (!redis) redis = Redis.fromEnv();
-  return redis;
-}
 
-const redisUrl = () => process.env.UPSTASH_REDIS_REST_URL;
-const redisToken = () => process.env.UPSTASH_REDIS_REST_TOKEN;
-
-async function redisBinaryCommand(path: string, init?: RequestInit, encoding = false) {
-  const url = redisUrl();
-  const token = redisToken();
-  if (!url || !token) throw new Error("Missing Upstash Redis environment variables.");
-
-  const response = await fetch(`${url}/${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      ...(encoding ? { "Upstash-Encoding": "base64" } : {}),
-      ...(init?.headers ?? {}),
-    },
-    cache: "no-store",
+  const client = createClient({ url });
+  client.on("error", (error) => {
+    console.error("Redis Client Error", error);
   });
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`Redis request failed (${response.status}): ${body}`);
+  globalForRedis.redisClient = client;
+  return client;
+}
+
+export async function getRedis() {
+  const client = getOrCreateRedisClient();
+
+  if (!client.isReady) {
+    if (!globalForRedis.connectPromise) {
+      globalForRedis.connectPromise = client
+        .connect()
+        .then(() => undefined)
+        .finally(() => {
+          globalForRedis.connectPromise = undefined;
+        });
+    }
+
+    await globalForRedis.connectPromise;
   }
-  return response;
+
+  return client;
 }
 
 export async function setBinary(key: string, bytes: Uint8Array, ttlSeconds?: number) {
-  const suffix = ttlSeconds && ttlSeconds > 0 ? `?EX=${Math.floor(ttlSeconds)}` : "";
-  await redisBinaryCommand(`set/${encodeURIComponent(key)}${suffix}`, {
-    method: "POST",
-    body: bytes as BodyInit,
-    headers: { "Content-Type": "application/octet-stream" },
-  });
+  const client = await getRedis();
+  const value = Buffer.from(bytes);
+  if (ttlSeconds && ttlSeconds > 0) {
+    await client.set(key, value, { EX: Math.floor(ttlSeconds) });
+  } else {
+    await client.set(key, value);
+  }
 }
 
-export async function getBinaryBase64(key: string): Promise<Uint8Array | null> {
-  const response = await redisBinaryCommand(`get/${encodeURIComponent(key)}`, { method: "GET" }, true);
-  const payload = (await response.json()) as { result: string | null };
-  if (!payload.result) return null;
+export async function getBinary(key: string): Promise<Uint8Array | null> {
+  const client = await getRedis();
+  const binaryClient = client.withTypeMapping({
+    [RESP_TYPES.BLOB_STRING]: Buffer,
+  });
 
-  const base64 = payload.result;
-  if (typeof Buffer !== "undefined") return new Uint8Array(Buffer.from(base64, "base64"));
-
-  const binary = atob(base64);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
-  return out;
+  const value = await binaryClient.get(key);
+  return value ? new Uint8Array(value) : null;
 }
