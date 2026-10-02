@@ -4,11 +4,11 @@ import "./globals.css";
 export const metadata: Metadata = {
   title: "Wedding Photo Booth",
   description: "An iPad-first wedding photo booth.",
+  manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     title: "Wedding Photo Booth",
     statusBarStyle: "black-translucent",
-    manifest: "/manifest.webmanifest",
   },
 };
 
