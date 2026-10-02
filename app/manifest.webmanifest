@@ -1,0 +1,10 @@
+{
+  "name": "Wedding Photo Booth",
+  "short_name": "Photo Booth",
+  "description": "Wedding photo booth for iPad Safari",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "orientation": "landscape"
+}
